@@ -2,23 +2,23 @@
 <html lang="pt-br">
 <head>
 <meta charset="utf-8">
-<title>Saúde Plena — Brasil (Hierarquia Territorial)</title>
+<title>Saúde Plena — Navegação Territorial</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 
 <style>
-html,body{height:100%;margin:0;font-family:system-ui}
+html,body{height:100%;margin:0}
 #map{height:100vh;width:100vw}
 
-#barra{
+#info{
   position:absolute;
   top:10px;
   left:50%;
   transform:translateX(-50%);
   background:#0f172a;
   color:#fff;
-  padding:8px 14px;
+  padding:8px 16px;
   border-radius:999px;
   font-size:14px;
   z-index:1000;
@@ -36,17 +36,7 @@ html,body{height:100%;margin:0;font-family:system-ui}
   padding:8px 12px;
   cursor:pointer;
   z-index:1000;
-  box-shadow:0 6px 20px rgba(0,0,0,.35);
   display:none;
-}
-#voltar:hover{background:#1f2937}
-
-.leaflet-tooltip{
-  background:#020617;
-  color:#fff;
-  border:1px solid rgba(255,255,255,.15);
-  border-radius:6px;
-  font-size:13px;
 }
 </style>
 </head>
@@ -54,78 +44,37 @@ html,body{height:100%;margin:0;font-family:system-ui}
 <body>
 
 <button id="voltar">⬅ Voltar</button>
-<div id="barra">Passe o mouse • Clique para entrar</div>
+<div id="info">Passe o mouse • Clique para entrar</div>
 <div id="map"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
 /* ================= MAPA ================= */
-const map = L.map("map",{zoomControl:true}).setView([-14,-54],4);
+const map = L.map("map").setView([-14,-54],4);
 
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
   attribution:"© OpenStreetMap"
 }).addTo(map);
 
-/* ================= ESTADO GLOBAL ================= */
-let nivel = "regiao"; // regiao | estado | municipio
-let camadaAtual = null;
+/* ================= VARIÁVEIS ================= */
+let nivel = "regiao";
+let camadaAtual;
 let geoRegioes, geoEstados, geoMunicipios;
-let historico = [];
+let pilha = [];
 
-/* ================= UI ================= */
-const barra = document.getElementById("barra");
-const btnVoltar = document.getElementById("voltar");
-
-btnVoltar.onclick = () => {
-  if(historico.length === 0) return;
-  const ultimo = historico.pop();
-  ultimo();
-};
+const info = document.getElementById("info");
+const voltar = document.getElementById("voltar");
 
 /* ================= ESTILO ================= */
 function estilo(cor){
-  return {
-    weight:1.4,
-    color:cor,
-    fillColor:cor,
-    fillOpacity:0.25
-  };
-}
-
-function destaque(e){
-  e.target.setStyle({weight:3,fillOpacity:0.4});
-}
-function reset(e){
-  camadaAtual.resetStyle(e.target);
+  return {weight:1.3,color:cor,fillColor:cor,fillOpacity:.25};
 }
 
 /* ================= FEATURE ================= */
-function onEachFeature(feature, layer){
-  const p = feature.properties || {};
-  const nome =
-    p.nome || p.NM_REGIAO || p.NM_UF || p.NM_MUN || "Sem nome";
-
+function bindFeature(layer, nome){
   layer.bindTooltip(nome,{sticky:true});
-
-  layer.on({
-    mouseover:destaque,
-    mouseout:reset,
-    click:()=>tratarClique(feature)
-  });
-}
-
-/* ================= CLIQUE ================= */
-function tratarClique(feature){
-  if(nivel === "regiao"){
-    const r = feature.properties.regiao || feature.properties.NM_REGIAO;
-    historico.push(mostrarRegioes);
-    mostrarEstados(r);
-  }
-  else if(nivel === "estado"){
-    const uf = feature.properties.sigla || feature.properties.SIGLA_UF;
-    historico.push(()=>mostrarEstados(feature.properties.NM_REGIAO));
-    mostrarMunicipios(uf);
-  }
+  layer.on("mouseover",e=>e.target.setStyle({weight:3,fillOpacity:.4}));
+  layer.on("mouseout",()=>camadaAtual.resetStyle(layer));
 }
 
 /* ================= MOSTRAR ================= */
@@ -137,54 +86,77 @@ function mostrarRegioes(){
   limpar();
   camadaAtual = L.geoJSON(geoRegioes,{
     style:()=>estilo("#7c3aed"),
-    onEachFeature
+    onEachFeature:(f,l)=>{
+      const nome = f.properties.NM_REGIAO || f.properties.nome || "Região";
+      bindFeature(l,nome);
+      l.on("click",()=>{
+        pilha=[];
+        pilha.push(mostrarRegioes);
+        mostrarEstados(nome);
+      });
+    }
   }).addTo(map);
 
   nivel="regiao";
-  historico=[];
-  btnVoltar.style.display="none";
-  barra.innerText="Brasil • Regiões";
+  voltar.style.display="none";
+  info.innerText="Brasil • Regiões";
   map.setView([-14,-54],4);
 }
 
 function mostrarEstados(regiao){
   limpar();
   camadaAtual = L.geoJSON(geoEstados,{
-    filter:f =>
-      f.properties.regiao===regiao ||
-      f.properties.NM_REGIAO===regiao,
     style:()=>estilo("#2563eb"),
-    onEachFeature
+    filter:f => f.properties.NM_REGIAO === regiao,
+    onEachFeature:(f,l)=>{
+      const nome = f.properties.NM_UF;
+      bindFeature(l,nome);
+      l.on("click",()=>{
+        pilha.push(()=>mostrarEstados(regiao));
+        mostrarMunicipios(f.properties.SIGLA_UF);
+      });
+    }
   }).addTo(map);
 
   nivel="estado";
-  btnVoltar.style.display="block";
-  barra.innerText=`Região: ${regiao} • Estados`;
+  voltar.style.display="block";
+  info.innerText=`Região: ${regiao}`;
   map.fitBounds(camadaAtual.getBounds());
 }
 
 function mostrarMunicipios(uf){
   limpar();
   camadaAtual = L.geoJSON(geoMunicipios,{
-    filter:f =>
-      f.properties.SIGLA_UF===uf ||
-      f.properties.uf===uf,
     style:()=>estilo("#059669"),
-    onEachFeature
+    filter:f => f.properties.SIGLA_UF === uf,
+    onEachFeature:(f,l)=>{
+      const nome = f.properties.NM_MUN;
+      bindFeature(l,nome);
+    }
   }).addTo(map);
 
   nivel="municipio";
-  barra.innerText=`Estado: ${uf} • Municípios`;
+  info.innerText=`Estado: ${uf}`;
   map.fitBounds(camadaAtual.getBounds());
 }
 
 /* ================= LOAD ================= */
 async function iniciar(){
   geoRegioes = await fetch("data/regioes.geojson").then(r=>r.json());
-  geoEstados  = await fetch("data/estados.geojson").then(r=>r.json());
+  geoEstados = await fetch("data/estados.geojson").then(r=>r.json());
   geoMunicipios = await fetch("data/municipios.geojson").then(r=>r.json());
-  mostrarRegioes();
+
+  // TESTE VISUAL IMEDIATO
+  L.geoJSON(geoRegioes,{style:{color:"red"}}).addTo(map);
+  setTimeout(()=>{
+    map.eachLayer(l=>{
+      if(l instanceof L.GeoJSON) map.removeLayer(l);
+    });
+    mostrarRegioes();
+  },1000);
 }
+
+voltar.onclick=()=>{ if(pilha.length) pilha.pop()(); };
 
 iniciar();
 </script>
