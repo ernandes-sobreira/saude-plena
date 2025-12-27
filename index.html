@@ -2,45 +2,172 @@
 <html lang="pt-br">
 <head>
 <meta charset="utf-8">
-<title>Teste GeoJSON — Saúde Plena</title>
+<title>Saúde Plena — Navegação Territorial (Brasil)</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 
 <style>
-html,body{height:100%;margin:0}
+html,body{height:100%;margin:0;font-family:system-ui}
 #map{height:100vh;width:100vw}
+
+#topo{
+  position:absolute;
+  top:10px;
+  left:50%;
+  transform:translateX(-50%);
+  background:#0f172a;
+  color:#fff;
+  padding:8px 16px;
+  border-radius:999px;
+  font-size:14px;
+  z-index:1000;
+  box-shadow:0 6px 20px rgba(0,0,0,.35)
+}
+#voltar{
+  position:absolute;
+  top:10px;
+  left:10px;
+  background:#111827;
+  color:#fff;
+  border:none;
+  border-radius:10px;
+  padding:8px 12px;
+  cursor:pointer;
+  z-index:1000;
+  display:none;
+}
+.leaflet-tooltip{
+  background:#020617;
+  color:#fff;
+  border:1px solid rgba(255,255,255,.15);
+  border-radius:6px;
+  font-size:13px;
+}
 </style>
 </head>
 
 <body>
+
+<button id="voltar">⬅ Voltar</button>
+<div id="topo">Brasil • Regiões</div>
 <div id="map"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
+/* ================= MAPA BASE ================= */
 const map = L.map("map").setView([-14,-54],4);
 
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
   attribution:"© OpenStreetMap"
 }).addTo(map);
 
-// TESTE CRU — SEM FILTRO, SEM NOME
-Promise.all([
-  fetch("data/regioes.geojson").then(r=>r.json()),
-  fetch("data/estados.geojson").then(r=>r.json()),
-  fetch("data/municipios.geojson").then(r=>r.json())
-]).then(([reg, est, mun])=>{
+/* ================= URLs REMOTAS ================= */
+const URL_ESTADOS =
+  "https://raw.githubusercontent.com/giuliano-macedo/geodata-br-states/main/geojson/br_states.json";
 
-  console.log("Regiões:", reg);
-  console.log("Estados:", est);
-  console.log("Municípios:", mun);
+const URL_MUNICIPIOS =
+  "https://raw.githubusercontent.com/tbrugz/geodata-br/master/geojson/geojos-{COD}-mun.json";
 
-  L.geoJSON(reg,{style:{color:"red",weight:3,fillOpacity:0}}).addTo(map);
-  L.geoJSON(est,{style:{color:"blue",weight:1,fillOpacity:0}}).addTo(map);
-  L.geoJSON(mun,{style:{color:"green",weight:0.5,fillOpacity:0}}).addTo(map);
+/* ================= ESTADO ================= */
+let nivel = "regiao"; // regiao | estado | municipio
+let camadaAtual;
+let estadosGeo;
+let municipiosLayer;
+let pilha = [];
 
-  map.fitBounds(L.geoJSON(est).getBounds());
-});
+const topo = document.getElementById("topo");
+const voltar = document.getElementById("voltar");
+
+/* ================= ESTILO ================= */
+function estilo(cor){
+  return {weight:1.4,color:cor,fillColor:cor,fillOpacity:.25};
+}
+
+/* ================= FEATURE ================= */
+function bindFeature(layer, nome){
+  layer.bindTooltip(nome,{sticky:true});
+  layer.on("mouseover",e=>e.target.setStyle({weight:3,fillOpacity:.4}));
+  layer.on("mouseout",()=>camadaAtual.resetStyle(layer));
+}
+
+/* ================= LIMPAR ================= */
+function limpar(){
+  if(camadaAtual) map.removeLayer(camadaAtual);
+  if(municipiosLayer) map.removeLayer(municipiosLayer);
+}
+
+/* ================= REGIÕES ================= */
+function mostrarRegioes(){
+  limpar();
+
+  camadaAtual = L.geoJSON(estadosGeo,{
+    style:()=>estilo("#7c3aed"),
+    onEachFeature:(f,l)=>{
+      bindFeature(l, f.properties.region);
+      l.on("click",()=>{
+        pilha=[];
+        pilha.push(mostrarRegioes);
+        mostrarEstados(f.properties.region);
+      });
+    }
+  }).addTo(map);
+
+  nivel="regiao";
+  voltar.style.display="none";
+  topo.innerText="Brasil • Regiões";
+  map.setView([-14,-54],4);
+}
+
+/* ================= ESTADOS ================= */
+function mostrarEstados(regiao){
+  limpar();
+
+  camadaAtual = L.geoJSON(estadosGeo,{
+    filter:f => f.properties.region === regiao,
+    style:()=>estilo("#2563eb"),
+    onEachFeature:(f,l)=>{
+      bindFeature(l, f.properties.name);
+      l.on("click",()=>{
+        pilha.push(()=>mostrarEstados(regiao));
+        mostrarMunicipios(f.properties.code_state, f.properties.abbrev_state);
+      });
+    }
+  }).addTo(map);
+
+  nivel="estado";
+  voltar.style.display="block";
+  topo.innerText=`Região: ${regiao}`;
+  map.fitBounds(camadaAtual.getBounds());
+}
+
+/* ================= MUNICÍPIOS (DINÂMICO) ================= */
+async function mostrarMunicipios(codUF, sigla){
+  limpar();
+  topo.innerText=`Estado: ${sigla} • Carregando municípios…`;
+
+  const url = URL_MUNICIPIOS.replace("{COD}", codUF);
+  const geo = await fetch(url).then(r=>r.json());
+
+  municipiosLayer = L.geoJSON(geo,{
+    style:()=>estilo("#059669"),
+    onEachFeature:(f,l)=>bindFeature(l, f.properties.name)
+  }).addTo(map);
+
+  nivel="municipio";
+  topo.innerText=`Estado: ${sigla} • Municípios`;
+  map.fitBounds(municipiosLayer.getBounds());
+}
+
+/* ================= LOAD ================= */
+async function iniciar(){
+  estadosGeo = await fetch(URL_ESTADOS).then(r=>r.json());
+  mostrarRegioes();
+}
+
+voltar.onclick=()=>{ if(pilha.length) pilha.pop()(); };
+
+iniciar();
 </script>
 </body>
 </html>
