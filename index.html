@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="pt-br">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Painel de Doenças — Mapa (Regiões / Estados / Municípios)</title>
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #app { height: 100%; display: grid; grid-template-rows: auto 1fr; background: #0b1220; color: #e8eefc; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    header{
+      padding: 12px 14px;
+      display:flex; gap:12px; align-items:center; justify-content:space-between;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      background: rgba(255,255,255,.03);
+      backdrop-filter: blur(10px);
+    }
+    header .left { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    header h1 { font-size: 16px; margin: 0; font-weight: 700; letter-spacing: .2px; }
+    header .pill {
+      font-size: 12px; padding: 6px 10px; border-radius: 999px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: rgba(255,255,255,.06);
+    }
+    #map { height: 100%; }
+
+    /* Painel pequeno */
+    .info {
+      background: rgba(10,16,30,.85);
+      border: 1px solid rgba(255,255,255,.14);
+      border-radius: 12px;
+      padding: 10px 12px;
+      color: #e8eefc;
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+      max-width: 320px;
+      line-height: 1.25;
+    }
+    .info h2 { margin: 0 0 6px; font-size: 13px; }
+    .info .muted { opacity: .8; font-size: 12px; }
+    .legend {
+      background: rgba(10,16,30,.85);
+      border: 1px solid rgba(255,255,255,.14);
+      border-radius: 12px;
+      padding: 10px 12px;
+      color: #e8eefc;
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+      font-size: 12px;
+      line-height: 1.25;
+    }
+    .legend .swatch {
+      display:inline-block; width: 10px; height: 10px; border-radius: 3px;
+      margin-right: 8px; vertical-align: middle;
+      border: 1px solid rgba(255,255,255,.18);
+    }
+
+    /* Ajuste do controle de camadas */
+    .leaflet-control-layers {
+      background: rgba(10,16,30,.85) !important;
+      border: 1px solid rgba(255,255,255,.14) !important;
+      border-radius: 12px !important;
+      color: #e8eefc !important;
+    }
+    .leaflet-control-layers label { color: #e8eefc !important; }
+  </style>
+</head>
+
+<body>
+<div id="app">
+  <header>
+    <div class="left">
+      <h1>🦟 Painel de Doenças — Mapa base</h1>
+      <span class="pill">3 camadas: Regiões • Estados • Municípios</span>
+      <span class="pill">Leaflet + GeoJSON</span>
+    </div>
+    <div class="pill" id="status">Carregando camadas…</div>
+  </header>
+
+  <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  // =========
+  // 1) MAPA
+  // =========
+  const map = L.map('map', { zoomControl: true }).setView([-14.2, -53.2], 4);
+
+  // Base map (OSM)
+  const baseOSM = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap'
+  }).addTo(map);
+
+  // =========
+  // 2) UI: Info box
+  // =========
+  const info = L.control({position:'topright'});
+  info.onAdd = function(){
+    const div = L.DomUtil.create('div','info');
+    div.innerHTML = `
+      <h2>Seleção</h2>
+      <div class="muted">Passe o mouse ou clique em uma área.</div>
+      <div id="sel" style="margin-top:8px; font-weight:700;">(nada selecionado)</div>
+      <div id="sel2" class="muted" style="margin-top:6px;">—</div>
+    `;
+    return div;
+  }
+  info.addTo(map);
+
+  function setSelection(title, subtitle){
+    document.getElementById('sel').textContent = title || '(nada selecionado)';
+    document.getElementById('sel2').textContent = subtitle || '—';
+  }
+
+  // =========
+  // 3) Estilos base (você vai trocar quando tiver indicadores)
+  // =========
+  function styleRegiao(){
+    return { weight: 2, color: '#a78bfa', fillColor: '#a78bfa', fillOpacity: 0.15 };
+  }
+  function styleEstado(){
+    return { weight: 1.5, color: '#60a5fa', fillColor: '#60a5fa', fillOpacity: 0.12 };
+  }
+  function styleMunicipio(){
+    return { weight: 0.8, color: '#34d399', fillColor: '#34d399', fillOpacity: 0.08 };
+  }
+
+  function highlight(e){
+    const layer = e.target;
+    layer.setStyle({ weight: 3, fillOpacity: 0.22 });
+    if (!L.Browser.ie && !L.Browser.opera && !L.Browser.edge) layer.bringToFront();
+  }
+
+  function resetHighlight(e){
+    // volta para o estilo original (Leaflet cuida via resetStyle do geojson)
+    const layer = e.target;
+    const parent = layer.__parentGeoJson;
+    if (parent) parent.resetStyle(layer);
+  }
+
+  function onEachFeatureFactory(tipo){
+    return function onEachFeature(feature, layer){
+      // Guardar referência do geojson "pai" para resetStyle
+      // (setado depois que o layer é criado)
+      layer.on({
+        mouseover: highlight,
+        mouseout: resetHighlight,
+        click: (e) => {
+          const props = feature.properties || {};
+          const nome =
+            props.nome || props.NM_MUN || props.NM_UF || props.NM_REGIAO || props.name || 'Sem nome';
+
+          let sub = `Camada: ${tipo}`;
+          // Campos comuns (se existirem)
+          if (props.sigla || props.SIGLA_UF) sub += ` • ${props.sigla || props.SIGLA_UF}`;
+          if (props.codigo || props.CD_MUN || props.CD_UF) sub += ` • código: ${props.codigo || props.CD_MUN || props.CD_UF}`;
+
+          setSelection(nome, sub);
+          map.fitBounds(e.target.getBounds(), { padding: [20, 20] });
+        }
+      });
+
+      // Tooltip leve
+      const props = feature.properties || {};
+      const nome =
+        props.nome || props.NM_MUN || props.NM_UF || props.NM_REGIAO || props.name || 'Sem nome';
+      layer.bindTooltip(nome, { sticky: true, opacity: 0.9 });
+    };
+  }
+
+  // =========
+  // 4) Carregamento das 3 camadas
+  // =========
+  const statusEl = document.getElementById('status');
+
+  async function loadGeoJSON(url){
+    const res = await fetch(url);
+    if(!res.ok) throw new Error(`Falha ao carregar ${url} (${res.status})`);
+    return await res.json();
+  }
+
+  let layerRegioes, layerEstados, layerMunicipios;
+
+  async function boot(){
+    try{
+      statusEl.textContent = 'Carregando GeoJSON…';
+
+      // Você só precisa garantir estes arquivos em /data
+      const [regioes, estados] = await Promise.all([
+        loadGeoJSON('./data/regioes.geojson'),
+        loadGeoJSON('./data/estados.geojson')
+      ]);
+
+      layerRegioes = L.geoJSON(regioes, {
+        style: styleRegiao,
+        onEachFeature: onEachFeatureFactory('Regiões')
+      });
+
+      layerEstados = L.geoJSON(estados, {
+        style: styleEstado,
+        onEachFeature: onEachFeatureFactory('Estados')
+      });
+
+      // Municípios é opcional (pode ser muito pesado); tenta carregar, mas não quebra se faltar
+      try{
+        const municipios = await loadGeoJSON('./data/municipios.geojson');
+        layerMunicipios = L.geoJSON(municipios, {
+          style: styleMunicipio,
+          onEachFeature: onEachFeatureFactory('Municípios')
+        });
+      } catch(err){
+        console.warn('Municípios não carregado (ok por enquanto):', err.message);
+        layerMunicipios = null;
+      }
+
+      // Setar referência do "pai" para resetStyle funcionar no mouseout
+      layerRegioes.eachLayer(l => l.__parentGeoJson = layerRegioes);
+      layerEstados.eachLayer(l => l.__parentGeoJson = layerEstados);
+      if(layerMunicipios) layerMunicipios.eachLayer(l => l.__parentGeoJson = layerMunicipios);
+
+      // Adiciona uma camada padrão (Estados)
+      layerEstados.addTo(map);
+
+      // Controle de camadas
+      const overlays = {
+        "Regiões": layerRegioes,
+        "Estados": layerEstados
+      };
+      if(layerMunicipios) overlays["Municípios"] = layerMunicipios;
+
+      L.control.layers(
+        { "Base (OSM)": baseOSM },
+        overlays,
+        { collapsed: false }
+      ).addTo(map);
+
+      statusEl.textContent = layerMunicipios
+        ? 'Pronto: Regiões + Estados + Municípios'
+        : 'Pronto: Regiões + Estados (Municípios opcional)';
+
+      // Legenda simples (por enquanto só explica as camadas)
+      const legend = L.control({position:'bottomright'});
+      legend.onAdd = function(){
+        const div = L.DomUtil.create('div','legend');
+        div.innerHTML = `
+          <div style="font-weight:700; margin-bottom:6px;">Legenda (base)</div>
+          <div><span class="swatch" style="background:#a78bfa"></span>Regiões</div>
+          <div><span class="swatch" style="background:#60a5fa"></span>Estados</div>
+          <div><span class="swatch" style="background:#34d399"></span>Municípios</div>
+          <div style="margin-top:8px; opacity:.85">
+            Depois você pluga indicadores (incidência, óbitos, letalidade) e essa legenda vira escala de cores.
+          </div>
+        `;
+        return div;
+      };
+      legend.addTo(map);
+
+    } catch (e){
+      console.error(e);
+      statusEl.textContent = 'Erro ao carregar camadas';
+      alert(
+        'Não consegui carregar os GeoJSON. Verifique se existem:\n' +
+        'data/regioes.geojson e data/estados.geojson\n' +
+        'e opcionalmente data/municipios.geojson\n\n' +
+        'Detalhe: ' + e.message
+      );
+    }
+  }
+
+  boot();
+</script>
+</body>
+</html>
