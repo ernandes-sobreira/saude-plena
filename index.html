@@ -2,406 +2,120 @@
 <html lang="pt-br">
 <head>
 <meta charset="utf-8">
-<title>Saúde Plena — Território (Região • Estado • Município • Biomas • Bacias)</title>
+<title>Saúde Plena — Camadas Territoriais</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 
 <style>
-  :root{ --ink:#0f172a; --panel:#0b1220; --line:rgba(255,255,255,.12); --muted:rgba(255,255,255,.78); }
-  html,body{height:100%;margin:0;font-family:system-ui}
-  #map{height:100vh;width:100vw}
-
-  #topo{
-    position:absolute; top:10px; left:50%; transform:translateX(-50%);
-    background:var(--ink); color:#fff; padding:8px 16px; border-radius:999px;
-    font-size:14px; z-index:1200; box-shadow:0 6px 20px rgba(0,0,0,.35)
-  }
-  #voltar{
-    position:absolute; top:10px; left:10px;
-    background:#111827; color:#fff; border:none; border-radius:10px;
-    padding:8px 12px; cursor:pointer; z-index:1200; display:none;
-  }
-
-  /* Loader */
-  #loader{
-    position:absolute; left:50%; top:56px; transform:translateX(-50%);
-    z-index:1200;
-    background:rgba(15,23,42,.92);
-    color:#fff; border:1px solid rgba(255,255,255,.12);
-    padding:8px 12px; border-radius:12px; font-size:13px;
-    display:none;
-    box-shadow:0 10px 30px rgba(0,0,0,.35);
-  }
-
-  /* Painel lateral */
-  #panel{
-    position:absolute; top:10px; right:10px; z-index:1200;
-    width:min(360px, calc(100vw - 20px));
-    background:rgba(11,18,32,.92);
-    color:#fff; border:1px solid var(--line); border-radius:14px;
-    box-shadow:0 18px 50px rgba(0,0,0,.45);
-    overflow:hidden;
-    display:none;
-    backdrop-filter: blur(8px);
-  }
-  #panel header{
-    padding:10px 12px; display:flex; align-items:center; justify-content:space-between;
-    border-bottom:1px solid var(--line);
-  }
-  #panel h3{margin:0;font-size:14px}
-  #panel button{
-    border:none; background:transparent; color:#fff; font-size:18px; cursor:pointer;
-    opacity:.85;
-  }
-  #panel .content{padding:12px; font-size:13px; color:var(--muted); line-height:1.35}
-  #panel .k{color:#fff;font-weight:700}
-  #panel .pill{
-    display:inline-block; font-size:12px; padding:4px 10px; border-radius:999px;
-    border:1px solid var(--line); margin:6px 6px 0 0;
-  }
-  #panel .hr{height:1px;background:var(--line);margin:10px 0}
-
-  .leaflet-tooltip{
-    background:#020617; color:#fff;
-    border:1px solid rgba(255,255,255,.15);
-    border-radius:6px; font-size:13px;
-  }
+html,body{height:100%;margin:0;font-family:system-ui}
+#map{height:100vh;width:100vw}
+.leaflet-tooltip{
+  background:#020617;color:#fff;
+  border:1px solid rgba(255,255,255,.15);
+  border-radius:6px;font-size:13px;
+}
 </style>
 </head>
 
 <body>
-<button id="voltar">⬅ Voltar</button>
-<div id="topo">Brasil • Regiões</div>
-<div id="loader">Carregando…</div>
-
-<div id="panel">
-  <header>
-    <h3 id="panelTitle">Detalhes</h3>
-    <button id="panelClose" title="Fechar">✕</button>
-  </header>
-  <div class="content" id="panelBody"></div>
-</div>
-
 <div id="map"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-/* ==============================
-   MAPA BASE
-============================== */
+
+/* ================= MAPA BASE ================= */
 const map = L.map("map").setView([-14,-54],4);
+
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
   attribution:"© OpenStreetMap"
 }).addTo(map);
 
-/* ==============================
-   URLs REMOTAS (CERTINHAS)
-============================== */
+/* ================= URLs ================= */
 const URL_ESTADOS =
   "https://raw.githubusercontent.com/giuliano-macedo/geodata-br-states/main/geojson/br_states.json";
 
-/* municípios por UF (ex.: 51 -> Mato Grosso) */
-const URL_MUNICIPIOS_TEMPLATE =
-  "https://raw.githubusercontent.com/tbrugz/geodata-br/master/geojson/geojs-{COD}-mun.json";
+const URL_MUNICIPIOS =
+  "https://raw.githubusercontent.com/tbrugz/geodata-br/master/geojson/geojs-100-mun.json";
 
-/* Biomas (geoJSON) — se este serviço cair, o mapa territorial segue funcionando */
 const URL_BIOMAS =
   "https://sisdia.df.gov.br/server/rest/services/Hosted/biomas_brasileiros/FeatureServer/1/query" +
   "?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&f=geojson";
 
-/* Bacias (geoJSON) — camada 1 (mais leve) */
 const URL_BACIAS =
   "https://www.snirh.gov.br/arcgis/rest/services/Divisoes_bacias_hidrograficas/FeatureServer/1/query" +
   "?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&f=geojson";
 
-/* ==============================
-   UI helpers
-============================== */
-const topo = document.getElementById("topo");
-const voltar = document.getElementById("voltar");
-const loader = document.getElementById("loader");
-
-const panel = document.getElementById("panel");
-const panelTitle = document.getElementById("panelTitle");
-const panelBody = document.getElementById("panelBody");
-document.getElementById("panelClose").onclick = ()=> panel.style.display="none";
-
-function setLoading(on, text="Carregando…"){
-  loader.style.display = on ? "block" : "none";
-  loader.textContent = text;
-}
-function openPanel(title, html){
-  panelTitle.textContent = title;
-  panelBody.innerHTML = html;
-  panel.style.display = "block";
-}
-
-/* ==============================
-   Estilos + utilitários
-============================== */
-function estilo(cor){
-  return {weight:1.4,color:cor,fillColor:cor,fillOpacity:.18};
-}
-function bindHover(layer, nome){
-  layer.bindTooltip(nome,{sticky:true});
-  layer.on("mouseover",e=>e.target.setStyle({weight:3,fillOpacity:.28}));
-  layer.on("mouseout",()=>{ if(camadaAtual && camadaAtual.resetStyle) camadaAtual.resetStyle(layer); });
-}
-
-/* tenta achar um nome em propriedades variadas */
-function anyName(props){
-  return props?.name || props?.NM_MUN || props?.NM_UF || props?.NOME || props?.NOM_BIOMA || props?.BIOMA || props?.Bioma || props?.NM_MESO || props?.NM_RH || "Sem nome";
-}
-
-/* ==============================
-   Navegação Região -> Estado -> Município
-   (Região é filtro lógico: estados coloridos por região)
-============================== */
-let estadosGeo;
-let camadaAtual = null;
-let municipiosLayer = null;
-let pilha = [];
-const municipiosCache = new Map(); // codUF -> geojson
-
-const regionColors = {
-  "Norte":"#7c3aed",
-  "Nordeste":"#f97316",
-  "Centro-Oeste":"#22c55e",
-  "Sudeste":"#2563eb",
-  "Sul":"#e11d48"
+/* ================= ESTILOS ================= */
+const estilos = {
+  estados: {color:"#2563eb", weight:1.5, fillOpacity:0.15},
+  municipios:{color:"#16a34a", weight:0.8, fillOpacity:0.08},
+  biomas:{color:"#22c55e", weight:1.2, fillOpacity:0.05},
+  bacias:{color:"#0284c7", weight:1.2, fillOpacity:0.05}
 };
 
-function limpar(){
-  if(camadaAtual) map.removeLayer(camadaAtual);
-  if(municipiosLayer) map.removeLayer(municipiosLayer);
-  camadaAtual = null;
-  municipiosLayer = null;
-}
+/* ================= CAMADAS ================= */
+let layerEstados, layerMunicipios, layerBiomas, layerBacias;
 
-/* REGIÕES (como filtro via estados) */
-function mostrarRegioes(){
-  limpar();
-  voltar.style.display="none";
-  topo.textContent = "Brasil • Regiões";
-
-  camadaAtual = L.geoJSON(estadosGeo,{
-    style:(f)=>estilo(regionColors[f.properties.region] || "#64748b"),
-    onEachFeature:(f,l)=>{
-      const reg = f.properties.region || "—";
-      const uf = f.properties.state_code || "—";
-      const nomeUF = f.properties.name || "Estado";
-      bindHover(l, `Região: ${reg} • ${nomeUF} (${uf})`);
-
-      l.on("click",()=>{
-        // clique: entrar na lista de estados daquela região
-        pilha = [mostrarRegioes];
-        mostrarEstados(reg);
-      });
-    }
-  }).addTo(map);
-
-  map.setView([-14,-54],4);
-
-  openPanel("Como usar", `
-    <div><span class="k">1)</span> Passe o mouse para ver nomes.</div>
-    <div><span class="k">2)</span> Clique em qualquer estado de uma <span class="k">região</span> → entra nos estados da região.</div>
-    <div><span class="k">3)</span> Clique no <span class="k">estado</span> → carrega os <span class="k">municípios</span> (por UF, leve).</div>
-    <div class="hr"></div>
-    <div><span class="k">Overlays:</span> use o botão de camadas (canto superior direito) para ligar <span class="k">Biomas</span> e <span class="k">Bacias</span>.</div>
-  `);
-}
-
-/* ESTADOS da região */
-function mostrarEstados(regiao){
-  limpar();
-  voltar.style.display="block";
-  topo.textContent = `Região: ${regiao}`;
-
-  camadaAtual = L.geoJSON(estadosGeo,{
-    filter:(f)=> f.properties.region === regiao,
-    style:()=>estilo("#2563eb"),
-    onEachFeature:(f,l)=>{
-      const nomeUF = f.properties.name || "Estado";
-      const sigla = f.properties.state_code || "—";
-      bindHover(l, `${nomeUF} (${sigla})`);
-
-      l.on("click",()=>{
-        pilha.push(()=>mostrarEstados(regiao));
-
-        const codUF = f.properties.ibge_code;   // ✅ campo certo do dataset
-        const siglaUF = f.properties.state_code;// ✅ campo certo do dataset
-
-        openPanel("Estado selecionado", `
-          <div><span class="k">${nomeUF}</span> (<span class="k">${siglaUF}</span>)</div>
-          <div class="pill">Região: ${regiao}</div>
-          <div class="pill">Código IBGE UF: ${codUF ?? "—"}</div>
-          <div class="hr"></div>
-          <div>Clique em um município para abrir o painel lateral (indicadores entram depois).</div>
-        `);
-
-        mostrarMunicipios(codUF, siglaUF, nomeUF);
-      });
-    }
-  }).addTo(map);
-
-  map.fitBounds(camadaAtual.getBounds());
-}
-
-/* MUNICÍPIOS por UF (URL remoto + cache) */
-async function mostrarMunicipios(codUF, siglaUF, nomeUF){
-  if(!codUF || !siglaUF){
-    topo.textContent = `Estado: ${siglaUF || "—"} • Erro`;
-    openPanel("Erro", `
-      Não achei o código do estado ao clicar.
-      <div class="hr"></div>
-      <div><span class="k">Detalhe:</span> o GeoJSON de estados não trouxe <code>ibge_code</code> / <code>state_code</code>.</div>
-    `);
-    return;
-  }
-
-  limpar();
-  voltar.style.display="block";
-  topo.textContent = `Estado: ${siglaUF} • Carregando municípios…`;
-  setLoading(true, `Carregando municípios de ${siglaUF}…`);
-
-  try{
-    let geo;
-    if(municipiosCache.has(codUF)){
-      geo = municipiosCache.get(codUF);
-    }else{
-      const url = URL_MUNICIPIOS_TEMPLATE.replace("{COD}", codUF);
-      const resp = await fetch(url, {cache:"force-cache"});
-      if(!resp.ok) throw new Error(`Falha ao buscar municípios (${resp.status})`);
-      geo = await resp.json();
-      municipiosCache.set(codUF, geo);
-    }
-
-    municipiosLayer = L.geoJSON(geo,{
-      style:()=>estilo("#059669"),
-      onEachFeature:(f,l)=>{
-        const nm = anyName(f.properties);
-        bindHover(l, nm);
-
-        l.on("click",()=>{
-          const codeM = f.properties?.code_muni || f.properties?.CD_MUN || f.properties?.id || "—";
-          openPanel("Município selecionado", `
-            <div><span class="k">${nm}</span></div>
-            <div class="pill">UF: ${siglaUF}</div>
-            <div class="pill">Código: ${codeM}</div>
-            <div class="hr"></div>
-            <div><span class="k">Saúde Plena (próximo passo):</span></div>
-            <div>Selecionar doença → período → indicadores → gráficos/heatmap → exportar.</div>
-          `);
-        });
-      }
-    }).addTo(map);
-
-    topo.textContent = `Estado: ${siglaUF} • Municípios`;
-    map.fitBounds(municipiosLayer.getBounds());
-
-  }catch(err){
-    topo.textContent = `Estado: ${siglaUF} • Erro ao carregar municípios`;
-    openPanel("Erro ao carregar municípios", `
-      <div style="margin-bottom:8px"><span class="k">${nomeUF}</span> (${siglaUF})</div>
-      <div>Motivo provável: arquivo remoto indisponível, bloqueio de rede ou mudança de nome.</div>
-      <div class="hr"></div>
-      <div><span class="k">Detalhe:</span> ${String(err.message)}</div>
-      <div class="pill" style="word-break:break-all;margin-top:10px">
-        ${URL_MUNICIPIOS_TEMPLATE.replace("{COD}", codUF)}
-      </div>
-    `);
-    console.error(err);
-  }finally{
-    setLoading(false);
-  }
-}
-
-/* Botão voltar */
-voltar.onclick = ()=>{
-  const fn = pilha.pop();
-  if(fn) fn();
-};
-
-/* ==============================
-   Overlays: Biomas e Bacias
-============================== */
-let layerBiomas = null;
-let layerBacias = null;
-let layersControl = null;
-
-async function carregarOverlays(){
-  try{
-    setLoading(true, "Carregando Biomas…");
-    const biomas = await fetch(URL_BIOMAS, {cache:"force-cache"}).then(r=>r.json());
-    layerBiomas = L.geoJSON(biomas,{
-      style:()=>({weight:1.2,color:"#16a34a",fillColor:"#16a34a",fillOpacity:.06}),
-      onEachFeature:(f,l)=>{
-        const nm = f.properties?.Bioma || f.properties?.BIOMA || f.properties?.nome || f.properties?.name || "Bioma";
-        l.bindTooltip(nm,{sticky:true});
-      }
-    });
-
-    setLoading(true, "Carregando Bacias Hidrográficas…");
-    const bacias = await fetch(URL_BACIAS, {cache:"force-cache"}).then(r=>r.json());
-    layerBacias = L.geoJSON(bacias,{
-      style:()=>({weight:1.2,color:"#0284c7",fillColor:"#0284c7",fillOpacity:.05}),
-      onEachFeature:(f,l)=>{
-        const nm = f.properties?.NM_MESO || f.properties?.NOME || f.properties?.name || "Bacia";
-        l.bindTooltip(nm,{sticky:true});
-      }
-    });
-
-    if(layersControl) layersControl.remove();
-    layersControl = L.control.layers(
-      null,
-      { "🌿 Biomas": layerBiomas, "💧 Bacias Hidrográficas (ANA — meso)": layerBacias },
-      {collapsed:true}
-    ).addTo(map);
-
-  }catch(err){
-    console.error(err);
-    openPanel("Overlays (aviso)", `
-      Não consegui carregar Biomas/Bacias agora (rede/serviço). O mapa territorial segue funcionando.
-      <div class="hr"></div>
-      <div><span class="k">Detalhe:</span> ${String(err.message)}</div>
-    `);
-  }finally{
-    setLoading(false);
-  }
-}
-
-/* ==============================
-   START
-============================== */
+/* ================= LOAD ================= */
 async function iniciar(){
-  try{
-    setLoading(true, "Carregando Estados…");
-    const resp = await fetch(URL_ESTADOS, {cache:"force-cache"});
-    if(!resp.ok) throw new Error(`Falha ao buscar estados (${resp.status})`);
-    estadosGeo = await resp.json();
 
-    // sanity log (se quiser ver schema no console)
-    // console.log("Exemplo properties:", estadosGeo.features?.[0]?.properties);
+  /* ESTADOS */
+  const estados = await fetch(URL_ESTADOS).then(r=>r.json());
+  layerEstados = L.geoJSON(estados,{
+    style: estilos.estados,
+    onEachFeature:(f,l)=>{
+      l.bindTooltip(`${f.properties.name} (${f.properties.state_code})`);
+    }
+  });
 
-    mostrarRegioes();
-    carregarOverlays();
+  /* MUNICÍPIOS (Brasil inteiro) */
+  const municipios = await fetch(URL_MUNICIPIOS).then(r=>r.json());
+  layerMunicipios = L.geoJSON(municipios,{
+    style: estilos.municipios,
+    onEachFeature:(f,l)=>{
+      l.bindTooltip(f.properties.name || "Município");
+    }
+  });
 
-  }catch(err){
-    console.error(err);
-    topo.textContent = "Erro ao carregar estados";
-    openPanel("Erro", `
-      Falha ao buscar o GeoJSON de estados.
-      <div class="hr"></div>
-      <div class="pill" style="word-break:break-all">${URL_ESTADOS}</div>
-      <div style="margin-top:10px"><span class="k">Detalhe:</span> ${String(err.message)}</div>
-    `);
-  }finally{
-    setLoading(false);
-  }
+  /* BIOMAS */
+  const biomas = await fetch(URL_BIOMAS).then(r=>r.json());
+  layerBiomas = L.geoJSON(biomas,{
+    style: estilos.biomas,
+    onEachFeature:(f,l)=>{
+      const nome = f.properties.BIOMA || f.properties.Bioma || "Bioma";
+      l.bindTooltip(nome);
+    }
+  });
+
+  /* BACIAS */
+  const bacias = await fetch(URL_BACIAS).then(r=>r.json());
+  layerBacias = L.geoJSON(bacias,{
+    style: estilos.bacias,
+    onEachFeature:(f,l)=>{
+      const nome = f.properties.NM_MESO || f.properties.NOME || "Bacia";
+      l.bindTooltip(nome);
+    }
+  });
+
+  /* CONTROLE DE CAMADAS */
+  L.control.layers(
+    null,
+    {
+      "🟦 Estados": layerEstados,
+      "🟩 Municípios": layerMunicipios,
+      "🌿 Biomas": layerBiomas,
+      "💧 Bacias Hidrográficas": layerBacias
+    },
+    {collapsed:false}
+  ).addTo(map);
+
+  /* Liga só estados por padrão */
+  layerEstados.addTo(map);
 }
 
 iniciar();
+
 </script>
 </body>
 </html>
