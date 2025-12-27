@@ -2,42 +2,94 @@
 <html lang="pt-br">
 <head>
 <meta charset="utf-8">
-<title>Saúde Plena — Camadas Territoriais</title>
+<title>Saúde Plena — Dengue (Camadas + Painel)</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 
 <style>
-html,body{height:100%;margin:0;font-family:system-ui}
-#map{height:100vh;width:100vw}
-.leaflet-tooltip{
-  background:#020617;color:#fff;
-  border:1px solid rgba(255,255,255,.15);
-  border-radius:6px;font-size:13px;
-}
+  :root{ --ink:#0f172a; --panel:#0b1220; --line:rgba(255,255,255,.12); --muted:rgba(255,255,255,.78); }
+  html,body{height:100%;margin:0;font-family:system-ui}
+  #map{height:100vh;width:100vw}
+
+  /* Loader */
+  #loader{
+    position:absolute; left:50%; top:12px; transform:translateX(-50%);
+    z-index:1500;
+    background:rgba(15,23,42,.92);
+    color:#fff; border:1px solid rgba(255,255,255,.12);
+    padding:8px 12px; border-radius:999px; font-size:13px;
+    display:none; box-shadow:0 10px 30px rgba(0,0,0,.35);
+  }
+
+  /* Painel lateral */
+  #panel{
+    position:absolute; top:10px; right:10px; z-index:1400;
+    width:min(420px, calc(100vw - 20px));
+    background:rgba(11,18,32,.92);
+    color:#fff; border:1px solid var(--line); border-radius:14px;
+    box-shadow:0 18px 50px rgba(0,0,0,.45);
+    overflow:hidden;
+    display:none;
+    backdrop-filter: blur(8px);
+  }
+  #panel header{
+    padding:10px 12px; display:flex; alignSalign-items:center; justify-content:space-between;
+    border-bottom:1px solid var(--line);
+  }
+  #panel h3{margin:0;font-size:14px}
+  #panel button{
+    border:none; background:transparent; color:#fff; font-size:18px; cursor:pointer; opacity:.9;
+  }
+  #panel .content{padding:12px; font-size:13px; color:var(--muted); line-height:1.35}
+  #panel .k{color:#fff;font-weight:700}
+  #panel .pill{
+    display:inline-block; font-size:12px; padding:4px 10px; border-radius:999px;
+    border:1px solid var(--line); margin:6px 6px 0 0;
+  }
+  #panel .hr{height:1px;background:var(--line);margin:10px 0}
+  #panel canvas{width:100% !important; height:220px !important;}
+
+  .leaflet-tooltip{
+    background:#020617; color:#fff;
+    border:1px solid rgba(255,255,255,.15);
+    border-radius:6px; font-size:13px;
+  }
 </style>
 </head>
 
 <body>
+<div id="loader">Carregando…</div>
+
+<div id="panel">
+  <header>
+    <h3 id="panelTitle">Detalhes</h3>
+    <button id="panelClose" title="Fechar">✕</button>
+  </header>
+  <div class="content" id="panelBody"></div>
+</div>
+
 <div id="map"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
+<script>
 /* ================= MAPA BASE ================= */
 const map = L.map("map").setView([-14,-54],4);
-
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
   attribution:"© OpenStreetMap"
 }).addTo(map);
 
-/* ================= URLs ================= */
+/* ================= URLs (remotas) ================= */
 const URL_ESTADOS =
   "https://raw.githubusercontent.com/giuliano-macedo/geodata-br-states/main/geojson/br_states.json";
 
+/* Municípios BR inteiro (pesado, mas simples). Se quiser leve, eu troco por “por UF sob demanda”. */
 const URL_MUNICIPIOS =
   "https://raw.githubusercontent.com/tbrugz/geodata-br/master/geojson/geojs-100-mun.json";
 
+/* Overlays */
 const URL_BIOMAS =
   "https://sisdia.df.gov.br/server/rest/services/Hosted/biomas_brasileiros/FeatureServer/1/query" +
   "?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&f=geojson";
@@ -46,7 +98,35 @@ const URL_BACIAS =
   "https://www.snirh.gov.br/arcgis/rest/services/Divisoes_bacias_hidrograficas/FeatureServer/1/query" +
   "?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&f=geojson";
 
-/* ================= ESTILOS ================= */
+/* Dengue (InfoDengue / AlertaDengue) — exige parâmetros obrigatórios */
+function urlDengue(ibge7, eyStart, eyEnd){
+  const ewStart = 1, ewEnd = 53;
+  return "https://info.dengue.mat.br/api/alertcity"
+    + `?geocode=${encodeURIComponent(ibge7)}`
+    + `&disease=dengue`
+    + `&format=json`
+    + `&ew_start=${ewStart}&ew_end=${ewEnd}`
+    + `&ey_start=${eyStart}&ey_end=${eyEnd}`;
+}
+
+/* ================= UI helpers ================= */
+const loader = document.getElementById("loader");
+const panel = document.getElementById("panel");
+const panelTitle = document.getElementById("panelTitle");
+const panelBody = document.getElementById("panelBody");
+document.getElementById("panelClose").onclick = ()=> panel.style.display="none";
+
+function setLoading(on, text="Carregando…"){
+  loader.style.display = on ? "block" : "none";
+  loader.textContent = text;
+}
+function openPanel(title, html){
+  panelTitle.textContent = title;
+  panelBody.innerHTML = html;
+  panel.style.display = "block";
+}
+
+/* ================= Estilos ================= */
 const estilos = {
   estados: {color:"#2563eb", weight:1.5, fillOpacity:0.15},
   municipios:{color:"#16a34a", weight:0.8, fillOpacity:0.08},
@@ -54,68 +134,233 @@ const estilos = {
   bacias:{color:"#0284c7", weight:1.2, fillOpacity:0.05}
 };
 
-/* ================= CAMADAS ================= */
+function anyProp(props, keys, fallback=null){
+  for(const k of keys){
+    if(props && props[k] !== undefined && props[k] !== null && props[k] !== "") return props[k];
+  }
+  return fallback;
+}
+
+/* IBGE 7 dígitos: tentamos vários campos (porque GeoJSON varia) */
+function getMunIBGE7(props){
+  const raw = anyProp(props, ["code_muni","CD_MUN","geocode","codigo_ibge","id","IBGE","cod_ibge","cod"], null);
+  if(raw === null) return null;
+  const s = String(raw).replace(/\D/g,"");
+  // geralmente já vem 7 dígitos; se vier 6/8, tentamos manter 7 (mas aqui preferimos ser estritos)
+  if(s.length === 7) return s;
+  // alguns datasets trazem 6 (sem dígito verificador). Não vou inventar.
+  return null;
+}
+
+/* Nome município */
+function getMunName(props){
+  return anyProp(props, ["name","NM_MUN","nome","NOME","municipio"], "Município");
+}
+
+/* ================= Gráfico ================= */
+let chartRef = null;
+function renderChart(canvasId, labels, casos, casosEst){
+  const ctx = document.getElementById(canvasId);
+  if(!ctx) return;
+  if(chartRef) chartRef.destroy();
+
+  chartRef = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        { label: "Casos (notificados)", data: casos, tension: 0.25, pointRadius: 0 },
+        { label: "Casos estimados", data: casosEst, tension: 0.25, pointRadius: 0 }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { labels: { color: "#fff" } },
+        tooltip: { enabled: true }
+      },
+      scales: {
+        x: { ticks: { color:"#cbd5e1", maxRotation:0, autoSkip:true } },
+        y: { ticks: { color:"#cbd5e1" } }
+      }
+    }
+  });
+}
+
+/* ================= Camadas ================= */
 let layerEstados, layerMunicipios, layerBiomas, layerBacias;
 
-/* ================= LOAD ================= */
 async function iniciar(){
+  try{
+    setLoading(true, "Carregando camadas…");
 
-  /* ESTADOS */
-  const estados = await fetch(URL_ESTADOS).then(r=>r.json());
-  layerEstados = L.geoJSON(estados,{
-    style: estilos.estados,
-    onEachFeature:(f,l)=>{
-      l.bindTooltip(`${f.properties.name} (${f.properties.state_code})`);
-    }
-  });
+    // ESTADOS
+    const estados = await fetch(URL_ESTADOS, {cache:"force-cache"}).then(r=>r.json());
+    layerEstados = L.geoJSON(estados,{
+      style: estilos.estados,
+      onEachFeature:(f,l)=>{
+        const nome = f.properties?.name || "Estado";
+        const uf = f.properties?.state_code || "";
+        l.bindTooltip(`${nome} ${uf ? "(" + uf + ")" : ""}`, {sticky:true});
+        l.on("click", ()=>{
+          openPanel("Estado", `
+            <div><span class="k">${nome}</span> ${uf ? "(" + uf + ")" : ""}</div>
+            <div class="hr"></div>
+            <div>Para dengue, clique em um <span class="k">município</span> (camada Municípios ligada).</div>
+          `);
+        });
+      }
+    });
 
-  /* MUNICÍPIOS (Brasil inteiro) */
-  const municipios = await fetch(URL_MUNICIPIOS).then(r=>r.json());
-  layerMunicipios = L.geoJSON(municipios,{
-    style: estilos.municipios,
-    onEachFeature:(f,l)=>{
-      l.bindTooltip(f.properties.name || "Município");
-    }
-  });
+    // MUNICÍPIOS (BR todo)
+    const municipios = await fetch(URL_MUNICIPIOS, {cache:"force-cache"}).then(r=>r.json());
+    layerMunicipios = L.geoJSON(municipios,{
+      style: estilos.municipios,
+      onEachFeature:(f,l)=>{
+        const nm = getMunName(f.properties);
+        l.bindTooltip(nm, {sticky:true});
 
-  /* BIOMAS */
-  const biomas = await fetch(URL_BIOMAS).then(r=>r.json());
-  layerBiomas = L.geoJSON(biomas,{
-    style: estilos.biomas,
-    onEachFeature:(f,l)=>{
-      const nome = f.properties.BIOMA || f.properties.Bioma || "Bioma";
-      l.bindTooltip(nome);
-    }
-  });
+        l.on("click", async ()=>{
+          const ibge7 = getMunIBGE7(f.properties);
+          if(!ibge7){
+            openPanel("Município", `
+              <div><span class="k">${nm}</span></div>
+              <div class="hr"></div>
+              <div><span class="k">Erro:</span> este GeoJSON não trouxe um código IBGE de 7 dígitos para este município.</div>
+              <div style="margin-top:8px; opacity:.9">Dica: eu ajusto o “campo certo” quando você me mandar um exemplo do <code>feature.properties</code> desse município.</div>
+            `);
+            return;
+          }
 
-  /* BACIAS */
-  const bacias = await fetch(URL_BACIAS).then(r=>r.json());
-  layerBacias = L.geoJSON(bacias,{
-    style: estilos.bacias,
-    onEachFeature:(f,l)=>{
-      const nome = f.properties.NM_MESO || f.properties.NOME || "Bacia";
-      l.bindTooltip(nome);
-    }
-  });
+          const year = new Date().getFullYear();
+          const eyStart = year - 2;
+          const eyEnd = year;
 
-  /* CONTROLE DE CAMADAS */
-  L.control.layers(
-    null,
-    {
-      "🟦 Estados": layerEstados,
-      "🟩 Municípios": layerMunicipios,
-      "🌿 Biomas": layerBiomas,
-      "💧 Bacias Hidrográficas": layerBacias
-    },
-    {collapsed:false}
-  ).addTo(map);
+          openPanel("Dengue — carregando", `
+            <div><span class="k">${nm}</span></div>
+            <div class="pill">IBGE: ${ibge7}</div>
+            <div class="pill">Fonte: InfoDengue</div>
+            <div class="hr"></div>
+            <div>Buscando série temporal (${eyStart}–${eyEnd})…</div>
+          `);
 
-  /* Liga só estados por padrão */
-  layerEstados.addTo(map);
+          try{
+            setLoading(true, `Dengue: ${nm}…`);
+            const url = urlDengue(ibge7, eyStart, eyEnd);
+            const data = await fetch(url, {cache:"no-store"}).then(r=>r.json());
+
+            // Normaliza campos (a API pode variar; na doc aparece casos/casos_est/nivel e data_iniSE)
+            const rows = Array.isArray(data) ? data : [];
+            if(!rows.length){
+              openPanel("Dengue — sem dados", `
+                <div><span class="k">${nm}</span></div>
+                <div class="pill">IBGE: ${ibge7}</div>
+                <div class="hr"></div>
+                <div>A API não retornou linhas para este período.</div>
+                <div style="margin-top:8px;opacity:.9">Se quiser, eu aumento a janela (ex.: 10 anos) ou mudo para outro provedor.</div>
+              `);
+              return;
+            }
+
+            // Ordena por SE (semana epidemiológica, ex.: 201741)
+            rows.sort((a,b)=> (a.SE ?? a.se ?? 0) - (b.SE ?? b.se ?? 0));
+
+            const labels = rows.map(r => String(r.SE ?? r.se ?? "").trim());
+            const casos = rows.map(r => Number(r.casos ?? 0));
+            const casosEst = rows.map(r => Number(r.casos_est ?? r.casos_estmax ?? r.casos_est_max ?? 0));
+            const nivelLast = rows[rows.length-1]?.nivel ?? null;
+            const incLast = rows[rows.length-1]?.p_inc100k ?? rows[rows.length-1]?.inc ?? null;
+
+            const canvasId = "chartDengue";
+            openPanel("Dengue — série temporal", `
+              <div><span class="k">${nm}</span></div>
+              <div class="pill">IBGE: ${ibge7}</div>
+              ${nivelLast!==null ? `<div class="pill">Nível (última SE): ${nivelLast}</div>` : ``}
+              ${incLast!==null ? `<div class="pill">Incidência (última SE): ${Number(incLast).toFixed(2)}</div>` : ``}
+              <div class="hr"></div>
+              <div style="height:220px"><canvas id="${canvasId}"></canvas></div>
+              <div class="hr"></div>
+              <div style="font-size:12px;opacity:.9">
+                Dica: depois a gente pinta o mapa por “nível” ou “incidência” (mas isso exige cache/otimização para não chamar API para 5.570 municípios).
+              </div>
+            `);
+
+            renderChart(canvasId, labels, casos, casosEst);
+
+          }catch(err){
+            console.error(err);
+            openPanel("Dengue — erro", `
+              <div><span class="k">${nm}</span></div>
+              <div class="pill">IBGE: ${ibge7}</div>
+              <div class="hr"></div>
+              <div>Falha ao consultar a API.</div>
+              <div style="margin-top:8px"><span class="k">Detalhe:</span> ${String(err.message)}</div>
+            `);
+          }finally{
+            setLoading(false);
+          }
+        });
+      }
+    });
+
+    // BIOMAS
+    const biomas = await fetch(URL_BIOMAS, {cache:"force-cache"}).then(r=>r.json());
+    layerBiomas = L.geoJSON(biomas,{
+      style: estilos.biomas,
+      onEachFeature:(f,l)=>{
+        const nome = anyProp(f.properties, ["BIOMA","Bioma","NOME","name"], "Bioma");
+        l.bindTooltip(nome,{sticky:true});
+      }
+    });
+
+    // BACIAS
+    const bacias = await fetch(URL_BACIAS, {cache:"force-cache"}).then(r=>r.json());
+    layerBacias = L.geoJSON(bacias,{
+      style: estilos.bacias,
+      onEachFeature:(f,l)=>{
+        const nome = anyProp(f.properties, ["NM_MESO","NOME","name"], "Bacia");
+        l.bindTooltip(nome,{sticky:true});
+      }
+    });
+
+    // Controle de camadas (do jeito que você quer)
+    L.control.layers(
+      null,
+      {
+        "🟦 Estados": layerEstados,
+        "🟩 Municípios": layerMunicipios,
+        "🌿 Biomas": layerBiomas,
+        "💧 Bacias Hidrográficas": layerBacias
+      },
+      {collapsed:false}
+    ).addTo(map);
+
+    // liga estados por padrão
+    layerEstados.addTo(map);
+
+    openPanel("Pronto: Dengue ligado", `
+      <div><span class="k">Como usar:</span></div>
+      <div>1) Ligue a camada <span class="k">🟩 Municípios</span>.</div>
+      <div>2) Clique em um município → abre painel e carrega dengue automático.</div>
+      <div class="hr"></div>
+      <div>Depois a gente coloca: filtros (ano/SE), ranking, indicadores, exportar CSV/PNG.</div>
+    `);
+
+  }catch(err){
+    console.error(err);
+    openPanel("Erro ao iniciar", `
+      <div>Falha ao carregar alguma camada remota.</div>
+      <div class="hr"></div>
+      <div><span class="k">Detalhe:</span> ${String(err.message)}</div>
+    `);
+  }finally{
+    setLoading(false);
+  }
 }
 
 iniciar();
-
 </script>
 </body>
 </html>
