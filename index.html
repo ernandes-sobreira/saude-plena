@@ -2,149 +2,191 @@
 <html lang="pt-br">
 <head>
 <meta charset="utf-8">
-<title>Painel de Doenças — Brasil</title>
+<title>Saúde Plena — Brasil (Hierarquia Territorial)</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 
 <style>
-html,body{height:100%;margin:0;font-family:system-ui;background:#0b1220;color:#eaefff}
-#app{display:flex;height:100%}
-#map{flex:1}
+html,body{height:100%;margin:0;font-family:system-ui}
+#map{height:100vh;width:100vw}
 
-#painel{
-  width:360px;
+#barra{
+  position:absolute;
+  top:10px;
+  left:50%;
+  transform:translateX(-50%);
   background:#0f172a;
-  border-left:1px solid rgba(255,255,255,.1);
-  padding:16px;
-  transform:translateX(100%);
-  transition:.3s;
-  overflow-y:auto;
+  color:#fff;
+  padding:8px 14px;
+  border-radius:999px;
+  font-size:14px;
+  z-index:1000;
+  box-shadow:0 6px 20px rgba(0,0,0,.35)
 }
-#painel.aberto{transform:translateX(0)}
-#painel h2{margin:0 0 6px;font-size:18px}
-#painel .sub{opacity:.7;font-size:13px;margin-bottom:12px}
-.card{
-  background:#111827;
-  border:1px solid rgba(255,255,255,.08);
-  border-radius:10px;
-  padding:10px;
-  margin-bottom:10px;
-}
-.vazio{opacity:.6;font-style:italic}
 
-.leaflet-control-layers{
-  background:#020617!important;
-  color:#fff!important;
-  border-radius:10px!important;
+#voltar{
+  position:absolute;
+  top:10px;
+  left:10px;
+  background:#111827;
+  color:#fff;
+  border:none;
+  border-radius:10px;
+  padding:8px 12px;
+  cursor:pointer;
+  z-index:1000;
+  box-shadow:0 6px 20px rgba(0,0,0,.35);
+  display:none;
+}
+#voltar:hover{background:#1f2937}
+
+.leaflet-tooltip{
+  background:#020617;
+  color:#fff;
+  border:1px solid rgba(255,255,255,.15);
+  border-radius:6px;
+  font-size:13px;
 }
 </style>
 </head>
 
 <body>
-<div id="app">
-  <div id="map"></div>
 
-  <div id="painel">
-    <h2 id="titulo">Seleção</h2>
-    <div class="sub" id="subtitulo">Clique no mapa</div>
-    <div id="conteudo" class="vazio">
-      Nenhum dado carregado ainda.
-    </div>
-  </div>
-</div>
+<button id="voltar">⬅ Voltar</button>
+<div id="barra">Passe o mouse • Clique para entrar</div>
+<div id="map"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const map = L.map('map').setView([-14,-54],4);
+/* ================= MAPA ================= */
+const map = L.map("map",{zoomControl:true}).setView([-14,-54],4);
 
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
-  attribution:'© OpenStreetMap'
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
+  attribution:"© OpenStreetMap"
 }).addTo(map);
 
-const painel = document.getElementById("painel");
-const titulo = document.getElementById("titulo");
-const subtitulo = document.getElementById("subtitulo");
-const conteudo = document.getElementById("conteudo");
+/* ================= ESTADO GLOBAL ================= */
+let nivel = "regiao"; // regiao | estado | municipio
+let camadaAtual = null;
+let geoRegioes, geoEstados, geoMunicipios;
+let historico = [];
 
-/* ========= PAINEL ========= */
-function abrirPainel(nivel, codigo, nome){
-  painel.classList.add("aberto");
-  titulo.innerText = nome;
-  subtitulo.innerText = `Nível: ${nivel} • Código: ${codigo}`;
-  conteudo.innerHTML = `
-    <div class="card">
-      <strong>Status</strong><br>
-      Painel pronto. Dados entram depois.
-    </div>
-    <div class="card">
-      <strong>Futuro aqui:</strong>
-      <ul>
-        <li>Casos</li>
-        <li>Óbitos</li>
-        <li>Incidência</li>
-        <li>Gráficos</li>
-      </ul>
-    </div>
-  `;
-}
+/* ================= UI ================= */
+const barra = document.getElementById("barra");
+const btnVoltar = document.getElementById("voltar");
 
-/* ========= ESTILO ========= */
+btnVoltar.onclick = () => {
+  if(historico.length === 0) return;
+  const ultimo = historico.pop();
+  ultimo();
+};
+
+/* ================= ESTILO ================= */
 function estilo(cor){
   return {
-    weight:1.2,
+    weight:1.4,
     color:cor,
     fillColor:cor,
-    fillOpacity:.15
+    fillOpacity:0.25
   };
 }
 
-/* ========= CLICK ========= */
-function bindClick(layer, nivel){
+function destaque(e){
+  e.target.setStyle({weight:3,fillOpacity:0.4});
+}
+function reset(e){
+  camadaAtual.resetStyle(e.target);
+}
+
+/* ================= FEATURE ================= */
+function onEachFeature(feature, layer){
+  const p = feature.properties || {};
+  const nome =
+    p.nome || p.NM_REGIAO || p.NM_UF || p.NM_MUN || "Sem nome";
+
+  layer.bindTooltip(nome,{sticky:true});
+
   layer.on({
-    click:e=>{
-      const p = e.target.feature.properties || {};
-      const nome = p.nome || p.NM_UF || p.NM_MUN || p.NM_REGIAO || "Sem nome";
-      const codigo =
-        p.sigla || p.SIGLA_UF ||
-        p.codigo || p.CD_MUN ||
-        p.regiao || p.CD_REGIAO ||
-        "—";
-      abrirPainel(nivel, codigo, nome);
-      map.fitBounds(e.target.getBounds(),{padding:[20,20]});
-    }
+    mouseover:destaque,
+    mouseout:reset,
+    click:()=>tratarClique(feature)
   });
 }
 
-/* ========= CAMADAS ========= */
-async function carregar(url, nivel, cor){
-  const g = await fetch(url).then(r=>r.json());
-  const layer = L.geoJSON(g,{
-    style:()=>estilo(cor),
-    onEachFeature:(f,l)=>bindClick(l,nivel)
-  });
-  return layer;
+/* ================= CLIQUE ================= */
+function tratarClique(feature){
+  if(nivel === "regiao"){
+    const r = feature.properties.regiao || feature.properties.NM_REGIAO;
+    historico.push(mostrarRegioes);
+    mostrarEstados(r);
+  }
+  else if(nivel === "estado"){
+    const uf = feature.properties.sigla || feature.properties.SIGLA_UF;
+    historico.push(()=>mostrarEstados(feature.properties.NM_REGIAO));
+    mostrarMunicipios(uf);
+  }
 }
 
-(async()=>{
-  const regioes = await carregar("data/regioes.geojson","Região","#a78bfa");
-  const estados  = await carregar("data/estados.geojson","Estado","#60a5fa");
+/* ================= MOSTRAR ================= */
+function limpar(){
+  if(camadaAtual) map.removeLayer(camadaAtual);
+}
 
-  regioes.addTo(map);
+function mostrarRegioes(){
+  limpar();
+  camadaAtual = L.geoJSON(geoRegioes,{
+    style:()=>estilo("#7c3aed"),
+    onEachFeature
+  }).addTo(map);
 
-  const overlays = {
-    "Regiões":regioes,
-    "Estados":estados
-  };
+  nivel="regiao";
+  historico=[];
+  btnVoltar.style.display="none";
+  barra.innerText="Brasil • Regiões";
+  map.setView([-14,-54],4);
+}
 
-  // municípios opcional
-  try{
-    const municipios = await carregar("data/municipios.geojson","Município","#34d399");
-    overlays["Municípios"] = municipios;
-  }catch(e){}
+function mostrarEstados(regiao){
+  limpar();
+  camadaAtual = L.geoJSON(geoEstados,{
+    filter:f =>
+      f.properties.regiao===regiao ||
+      f.properties.NM_REGIAO===regiao,
+    style:()=>estilo("#2563eb"),
+    onEachFeature
+  }).addTo(map);
 
-  L.control.layers(null,overlays,{collapsed:false}).addTo(map);
-})();
+  nivel="estado";
+  btnVoltar.style.display="block";
+  barra.innerText=`Região: ${regiao} • Estados`;
+  map.fitBounds(camadaAtual.getBounds());
+}
+
+function mostrarMunicipios(uf){
+  limpar();
+  camadaAtual = L.geoJSON(geoMunicipios,{
+    filter:f =>
+      f.properties.SIGLA_UF===uf ||
+      f.properties.uf===uf,
+    style:()=>estilo("#059669"),
+    onEachFeature
+  }).addTo(map);
+
+  nivel="municipio";
+  barra.innerText=`Estado: ${uf} • Municípios`;
+  map.fitBounds(camadaAtual.getBounds());
+}
+
+/* ================= LOAD ================= */
+async function iniciar(){
+  geoRegioes = await fetch("data/regioes.geojson").then(r=>r.json());
+  geoEstados  = await fetch("data/estados.geojson").then(r=>r.json());
+  geoMunicipios = await fetch("data/municipios.geojson").then(r=>r.json());
+  mostrarRegioes();
+}
+
+iniciar();
 </script>
 </body>
 </html>
