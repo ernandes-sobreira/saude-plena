@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 
 <style>
-  :root{ --ink:#0f172a; --card:#0b1220; --line:rgba(255,255,255,.12); --muted:rgba(255,255,255,.75); }
+  :root{ --ink:#0f172a; --panel:#0b1220; --line:rgba(255,255,255,.12); --muted:rgba(255,255,255,.78); }
   html,body{height:100%;margin:0;font-family:system-ui}
   #map{height:100vh;width:100vw}
 
@@ -21,6 +21,17 @@
     position:absolute; top:10px; left:10px;
     background:#111827; color:#fff; border:none; border-radius:10px;
     padding:8px 12px; cursor:pointer; z-index:1200; display:none;
+  }
+
+  /* Loader */
+  #loader{
+    position:absolute; left:50%; top:56px; transform:translateX(-50%);
+    z-index:1200;
+    background:rgba(15,23,42,.92);
+    color:#fff; border:1px solid rgba(255,255,255,.12);
+    padding:8px 12px; border-radius:12px; font-size:13px;
+    display:none;
+    box-shadow:0 10px 30px rgba(0,0,0,.35);
   }
 
   /* Painel lateral */
@@ -44,22 +55,12 @@
     opacity:.85;
   }
   #panel .content{padding:12px; font-size:13px; color:var(--muted); line-height:1.35}
-  #panel .k{color:#fff;font-weight:600}
+  #panel .k{color:#fff;font-weight:700}
   #panel .pill{
     display:inline-block; font-size:12px; padding:4px 10px; border-radius:999px;
     border:1px solid var(--line); margin:6px 6px 0 0;
   }
-
-  /* Loader */
-  #loader{
-    position:absolute; left:50%; top:56px; transform:translateX(-50%);
-    z-index:1200;
-    background:rgba(15,23,42,.92);
-    color:#fff; border:1px solid rgba(255,255,255,.12);
-    padding:8px 12px; border-radius:12px; font-size:13px;
-    display:none;
-    box-shadow:0 10px 30px rgba(0,0,0,.35);
-  }
+  #panel .hr{height:1px;background:var(--line);margin:10px 0}
 
   .leaflet-tooltip{
     background:#020617; color:#fff;
@@ -96,24 +97,20 @@ L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{
 
 /* ==============================
    URLs REMOTAS (CERTINHAS)
-   - Estados: giuliano-macedo/geodata-br-states
-   - Municípios por UF: tbrugz/geodata-br (geojs-{COD}-mun.json)
-   - Biomas: FeatureServer (geoJSON)
-   - Bacias: SNIRH/ANA FeatureServer (geoJSON)
 ============================== */
 const URL_ESTADOS =
   "https://raw.githubusercontent.com/giuliano-macedo/geodata-br-states/main/geojson/br_states.json";
 
-/* exemplo final: .../geojs-51-mun.json */
+/* municípios por UF (ex.: 51 -> Mato Grosso) */
 const URL_MUNICIPIOS_TEMPLATE =
   "https://raw.githubusercontent.com/tbrugz/geodata-br/master/geojson/geojs-{COD}-mun.json";
 
-/* Biomas (geoJSON via ArcGIS REST). 6 features -> leve */
+/* Biomas (geoJSON) — se este serviço cair, o mapa territorial segue funcionando */
 const URL_BIOMAS =
   "https://sisdia.df.gov.br/server/rest/services/Hosted/biomas_brasileiros/FeatureServer/1/query" +
   "?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&f=geojson";
 
-/* Bacias (Divisões de bacias hidrográficas - ANA/SNIRH). Usando a camada 1 (Meso Região) por ser mais leve */
+/* Bacias (geoJSON) — camada 1 (mais leve) */
 const URL_BACIAS =
   "https://www.snirh.gov.br/arcgis/rest/services/Divisoes_bacias_hidrograficas/FeatureServer/1/query" +
   "?where=1%3D1&outFields=*&returnGeometry=true&outSR=4326&f=geojson";
@@ -134,7 +131,6 @@ function setLoading(on, text="Carregando…"){
   loader.style.display = on ? "block" : "none";
   loader.textContent = text;
 }
-
 function openPanel(title, html){
   panelTitle.textContent = title;
   panelBody.innerHTML = html;
@@ -142,13 +138,10 @@ function openPanel(title, html){
 }
 
 /* ==============================
-   Estilos e leitura robusta de campos
+   Estilos + utilitários
 ============================== */
 function estilo(cor){
   return {weight:1.4,color:cor,fillColor:cor,fillOpacity:.18};
-}
-function tooltipName(props){
-  return props?.name || props?.NM_MUN || props?.NM_UF || props?.NOME || props?.NOM_BIOMA || props?.BIOMA || "Sem nome";
 }
 function bindHover(layer, nome){
   layer.bindTooltip(nome,{sticky:true});
@@ -156,8 +149,14 @@ function bindHover(layer, nome){
   layer.on("mouseout",()=>{ if(camadaAtual && camadaAtual.resetStyle) camadaAtual.resetStyle(layer); });
 }
 
+/* tenta achar um nome em propriedades variadas */
+function anyName(props){
+  return props?.name || props?.NM_MUN || props?.NM_UF || props?.NOME || props?.NOM_BIOMA || props?.BIOMA || props?.Bioma || props?.NM_MESO || props?.NM_RH || "Sem nome";
+}
+
 /* ==============================
    Navegação Região -> Estado -> Município
+   (Região é filtro lógico: estados coloridos por região)
 ============================== */
 let estadosGeo;
 let camadaAtual = null;
@@ -180,57 +179,68 @@ function limpar(){
   municipiosLayer = null;
 }
 
-/* -------- REGIÕES (clicável) --------
-   Observação: aqui a "camada de regiões" é derivada dos estados (não dissolvida).
-   Na prática, funciona: hover mostra região e clique filtra estados.
-*/
+/* REGIÕES (como filtro via estados) */
 function mostrarRegioes(){
   limpar();
   voltar.style.display="none";
   topo.textContent = "Brasil • Regiões";
 
   camadaAtual = L.geoJSON(estadosGeo,{
-    style:(f)=>estilo(regionColors[f.properties.region] || "#7c3aed"),
+    style:(f)=>estilo(regionColors[f.properties.region] || "#64748b"),
     onEachFeature:(f,l)=>{
-      bindHover(l, f.properties.region || "Região");
+      const reg = f.properties.region || "—";
+      const uf = f.properties.state_code || "—";
+      const nomeUF = f.properties.name || "Estado";
+      bindHover(l, `Região: ${reg} • ${nomeUF} (${uf})`);
+
       l.on("click",()=>{
+        // clique: entrar na lista de estados daquela região
         pilha = [mostrarRegioes];
-        const reg = f.properties.region;
         mostrarEstados(reg);
       });
     }
   }).addTo(map);
 
   map.setView([-14,-54],4);
+
+  openPanel("Como usar", `
+    <div><span class="k">1)</span> Passe o mouse para ver nomes.</div>
+    <div><span class="k">2)</span> Clique em qualquer estado de uma <span class="k">região</span> → entra nos estados da região.</div>
+    <div><span class="k">3)</span> Clique no <span class="k">estado</span> → carrega os <span class="k">municípios</span> (por UF, leve).</div>
+    <div class="hr"></div>
+    <div><span class="k">Overlays:</span> use o botão de camadas (canto superior direito) para ligar <span class="k">Biomas</span> e <span class="k">Bacias</span>.</div>
+  `);
 }
 
-/* -------- ESTADOS -------- */
+/* ESTADOS da região */
 function mostrarEstados(regiao){
   limpar();
   voltar.style.display="block";
   topo.textContent = `Região: ${regiao}`;
 
   camadaAtual = L.geoJSON(estadosGeo,{
-    filter:(f)=> (f.properties.region === regiao),
+    filter:(f)=> f.properties.region === regiao,
     style:()=>estilo("#2563eb"),
     onEachFeature:(f,l)=>{
-      bindHover(l, f.properties.name || "Estado");
+      const nomeUF = f.properties.name || "Estado";
+      const sigla = f.properties.state_code || "—";
+      bindHover(l, `${nomeUF} (${sigla})`);
+
       l.on("click",()=>{
         pilha.push(()=>mostrarEstados(regiao));
-        const codUF = f.properties.ibge_code;     // ✅ campo certo
-        const sigla = f.properties.state_code;    // ✅ campo certo
-        const nomeUF = f.properties.name || sigla;
+
+        const codUF = f.properties.ibge_code;   // ✅ campo certo do dataset
+        const siglaUF = f.properties.state_code;// ✅ campo certo do dataset
 
         openPanel("Estado selecionado", `
-          <div><span class="k">${nomeUF}</span> (<span class="k">${sigla}</span>)</div>
-          <div class="pill">Código IBGE: ${codUF}</div>
+          <div><span class="k">${nomeUF}</span> (<span class="k">${siglaUF}</span>)</div>
           <div class="pill">Região: ${regiao}</div>
-          <div style="margin-top:10px">
-            Clique novamente no mapa para entrar nos <span class="k">municípios</span>.
-          </div>
+          <div class="pill">Código IBGE UF: ${codUF ?? "—"}</div>
+          <div class="hr"></div>
+          <div>Clique em um município para abrir o painel lateral (indicadores entram depois).</div>
         `);
 
-        mostrarMunicipios(codUF, sigla, nomeUF);
+        mostrarMunicipios(codUF, siglaUF, nomeUF);
       });
     }
   }).addTo(map);
@@ -238,22 +248,22 @@ function mostrarEstados(regiao){
   map.fitBounds(camadaAtual.getBounds());
 }
 
-/* -------- MUNICÍPIOS (por UF, URL remoto, cache) -------- */
-async function mostrarMunicipios(codUF, sigla, nomeUF){
-  // validação simples
-  if(!codUF || !sigla){
-    topo.textContent = "Erro: código do estado não encontrado";
+/* MUNICÍPIOS por UF (URL remoto + cache) */
+async function mostrarMunicipios(codUF, siglaUF, nomeUF){
+  if(!codUF || !siglaUF){
+    topo.textContent = `Estado: ${siglaUF || "—"} • Erro`;
     openPanel("Erro", `
-      Não achei o código do estado ao clicar. Isso costuma acontecer se o arquivo de estados mudou o schema.
-      <div style="margin-top:8px"><span class="k">Dica:</span> abra o Console (F12) e veja o objeto <code>feature.properties</code>.</div>
+      Não achei o código do estado ao clicar.
+      <div class="hr"></div>
+      <div><span class="k">Detalhe:</span> o GeoJSON de estados não trouxe <code>ibge_code</code> / <code>state_code</code>.</div>
     `);
     return;
   }
 
   limpar();
   voltar.style.display="block";
-  topo.textContent = `Estado: ${sigla} • Carregando municípios…`;
-  setLoading(true, `Carregando municípios de ${sigla}…`);
+  topo.textContent = `Estado: ${siglaUF} • Carregando municípios…`;
+  setLoading(true, `Carregando municípios de ${siglaUF}…`);
 
   try{
     let geo;
@@ -270,33 +280,36 @@ async function mostrarMunicipios(codUF, sigla, nomeUF){
     municipiosLayer = L.geoJSON(geo,{
       style:()=>estilo("#059669"),
       onEachFeature:(f,l)=>{
-        const nm = tooltipName(f.properties);
+        const nm = anyName(f.properties);
         bindHover(l, nm);
+
         l.on("click",()=>{
           const codeM = f.properties?.code_muni || f.properties?.CD_MUN || f.properties?.id || "—";
           openPanel("Município selecionado", `
             <div><span class="k">${nm}</span></div>
-            <div class="pill">UF: ${sigla}</div>
+            <div class="pill">UF: ${siglaUF}</div>
             <div class="pill">Código: ${codeM}</div>
-            <div style="margin-top:10px">
-              <span class="k">Saúde Plena (em breve):</span><br>
-              aqui você vai ligar seus indicadores (dengue, SRAG, malária, etc.) por município/estado/região.
-            </div>
+            <div class="hr"></div>
+            <div><span class="k">Saúde Plena (próximo passo):</span></div>
+            <div>Selecionar doença → período → indicadores → gráficos/heatmap → exportar.</div>
           `);
         });
       }
     }).addTo(map);
 
-    topo.textContent = `Estado: ${sigla} • Municípios`;
+    topo.textContent = `Estado: ${siglaUF} • Municípios`;
     map.fitBounds(municipiosLayer.getBounds());
+
   }catch(err){
-    topo.textContent = `Estado: ${sigla} • Erro ao carregar municípios`;
+    topo.textContent = `Estado: ${siglaUF} • Erro ao carregar municípios`;
     openPanel("Erro ao carregar municípios", `
-      <div style="margin-bottom:8px"><span class="k">${nomeUF}</span> (${sigla})</div>
-      <div>Motivo provável: arquivo remoto indisponível no momento ou bloqueio de rede.</div>
-      <div style="margin-top:8px"><span class="k">Detalhe:</span> ${String(err.message)}</div>
-      <div style="margin-top:8px">Teste abrindo no navegador o arquivo remoto:</div>
-      <div class="pill" style="word-break:break-all">${URL_MUNICIPIOS_TEMPLATE.replace("{COD}", codUF)}</div>
+      <div style="margin-bottom:8px"><span class="k">${nomeUF}</span> (${siglaUF})</div>
+      <div>Motivo provável: arquivo remoto indisponível, bloqueio de rede ou mudança de nome.</div>
+      <div class="hr"></div>
+      <div><span class="k">Detalhe:</span> ${String(err.message)}</div>
+      <div class="pill" style="word-break:break-all;margin-top:10px">
+        ${URL_MUNICIPIOS_TEMPLATE.replace("{COD}", codUF)}
+      </div>
     `);
     console.error(err);
   }finally{
@@ -318,19 +331,17 @@ let layerBacias = null;
 let layersControl = null;
 
 async function carregarOverlays(){
-  // Biomas
   try{
     setLoading(true, "Carregando Biomas…");
     const biomas = await fetch(URL_BIOMAS, {cache:"force-cache"}).then(r=>r.json());
     layerBiomas = L.geoJSON(biomas,{
       style:()=>({weight:1.2,color:"#16a34a",fillColor:"#16a34a",fillOpacity:.06}),
       onEachFeature:(f,l)=>{
-        const nm = f.properties?.Bioma || f.properties?.BIOMA || f.properties?.nome || "Bioma";
+        const nm = f.properties?.Bioma || f.properties?.BIOMA || f.properties?.nome || f.properties?.name || "Bioma";
         l.bindTooltip(nm,{sticky:true});
       }
     });
 
-    // Bacias (Meso Região)
     setLoading(true, "Carregando Bacias Hidrográficas…");
     const bacias = await fetch(URL_BACIAS, {cache:"force-cache"}).then(r=>r.json());
     layerBacias = L.geoJSON(bacias,{
@@ -341,14 +352,10 @@ async function carregarOverlays(){
       }
     });
 
-    // Controle de camadas
     if(layersControl) layersControl.remove();
     layersControl = L.control.layers(
       null,
-      {
-        "🌿 Biomas": layerBiomas,
-        "💧 Bacias Hidrográficas (ANA — meso)": layerBacias
-      },
+      { "🌿 Biomas": layerBiomas, "💧 Bacias Hidrográficas (ANA — meso)": layerBacias },
       {collapsed:true}
     ).addTo(map);
 
@@ -356,7 +363,8 @@ async function carregarOverlays(){
     console.error(err);
     openPanel("Overlays (aviso)", `
       Não consegui carregar Biomas/Bacias agora (rede/serviço). O mapa territorial segue funcionando.
-      <div style="margin-top:8px"><span class="k">Detalhe:</span> ${String(err.message)}</div>
+      <div class="hr"></div>
+      <div><span class="k">Detalhe:</span> ${String(err.message)}</div>
     `);
   }finally{
     setLoading(false);
@@ -369,23 +377,24 @@ async function carregarOverlays(){
 async function iniciar(){
   try{
     setLoading(true, "Carregando Estados…");
-    estadosGeo = await fetch(URL_ESTADOS, {cache:"force-cache"}).then(r=>r.json());
+    const resp = await fetch(URL_ESTADOS, {cache:"force-cache"});
+    if(!resp.ok) throw new Error(`Falha ao buscar estados (${resp.status})`);
+    estadosGeo = await resp.json();
+
+    // sanity log (se quiser ver schema no console)
+    // console.log("Exemplo properties:", estadosGeo.features?.[0]?.properties);
+
     mostrarRegioes();
     carregarOverlays();
-    openPanel("Como usar", `
-      <div><span class="k">1)</span> Passe o mouse para ver nomes.</div>
-      <div><span class="k">2)</span> Clique numa <span class="k">região</span> → entra nos estados.</div>
-      <div><span class="k">3)</span> Clique num <span class="k">estado</span> → carrega municípios (leve, por UF).</div>
-      <div style="margin-top:10px"><span class="k">Overlays:</span> use o botão de camadas (canto superior direito do mapa) para ligar <span class="k">Biomas</span> e <span class="k">Bacias</span>.</div>
-    `);
+
   }catch(err){
     console.error(err);
     topo.textContent = "Erro ao carregar estados";
     openPanel("Erro", `
       Falha ao buscar o GeoJSON de estados.
-      <div style="margin-top:8px"><span class="k">URL:</span></div>
+      <div class="hr"></div>
       <div class="pill" style="word-break:break-all">${URL_ESTADOS}</div>
-      <div style="margin-top:8px"><span class="k">Detalhe:</span> ${String(err.message)}</div>
+      <div style="margin-top:10px"><span class="k">Detalhe:</span> ${String(err.message)}</div>
     `);
   }finally{
     setLoading(false);
