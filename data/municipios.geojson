@@ -1,1 +1,24 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "NM_MUN": "Cáceres",
+        "SIGLA_UF": "MT",
+        "CD_MUN": "5103403"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [[
+          [-58.0, -15.0],
+          [-57.0, -15.0],
+          [-57.0, -16.2],
+          [-58.0, -16.2],
+          [-58.0, -15.0]
+        ]]
+      }
+    }
+  ]
+}
 
